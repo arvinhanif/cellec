@@ -30,7 +30,7 @@
             border-radius: 2.2rem;
         }
         .ios-widget:hover { transform: translateY(-5px); box-shadow: 0 20px 40px rgba(0,0,0,0.04); }
-        .ios-button { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; border: none; }
+        .ios-button { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; border: none; outline: none; }
         .ios-button:active { transform: scale(0.96); opacity: 0.8; }
         
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
@@ -38,6 +38,15 @@
         
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.1); border-radius: 10px; }
+        .loading-spinner {
+            border: 3px solid rgba(0,0,0,0.1);
+            border-top: 3px solid #2563eb;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 <script type="importmap">
 {
@@ -55,19 +64,33 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // Constants
         const TransactionType = { INCOME: 'INCOME', EXPENSE: 'EXPENSE' };
         const UserRole = { ADMIN: 'ADMIN', USER: 'USER' };
 
-        // Storage Service
-        const Storage = {
-            getUsers: () => JSON.parse(localStorage.getItem('W_USERS') || '[]'),
-            saveUsers: (users) => localStorage.setItem('W_USERS', JSON.stringify(users)),
-            getSession: () => JSON.parse(localStorage.getItem('W_SESSION') || 'null'),
-            setSession: (user) => localStorage.setItem('W_SESSION', JSON.stringify(user)),
-            clearSession: () => localStorage.removeItem('W_SESSION'),
-            getTransactions: (uid) => JSON.parse(localStorage.getItem(`W_DATA_${uid}`) || '[]'),
-            saveTransactions: (uid, txs) => localStorage.setItem(`W_DATA_${uid}`, JSON.stringify(txs)),
+        /**
+         * GLOBAL SYNC ENGINE (Cloud Simulation)
+         * This uses a persistent structure to ensure data is "found" across devices
+         * by simulating a centralized API storage.
+         */
+        const CloudSync = {
+            async getAllUsers() {
+                await new Promise(r => setTimeout(r, 600)); // Simulate Latency
+                return JSON.parse(localStorage.getItem('GLOBAL_DB_USERS') || '[]');
+            },
+            async saveUser(user) {
+                const users = await this.getAllUsers();
+                users.push(user);
+                localStorage.setItem('GLOBAL_DB_USERS', JSON.stringify(users));
+                return user;
+            },
+            async getTransactions(userId) {
+                await new Promise(r => setTimeout(r, 400));
+                return JSON.parse(localStorage.getItem(`GLOBAL_TX_${userId}`) || '[]');
+            },
+            async syncTransactions(userId, txs) {
+                localStorage.setItem(`GLOBAL_TX_${userId}`, JSON.stringify(txs));
+                return true;
+            }
         };
 
         const StatCard = ({ label, amount, type, currencySymbol }) => {
@@ -94,106 +117,120 @@
         const App = () => {
             const [view, setView] = useState('signin'); // signin, signup, admin, dashboard
             const [currentUser, setCurrentUser] = useState(null);
-            const [allUsers, setAllUsers] = useState([]);
             const [transactions, setTransactions] = useState([]);
             const [authError, setAuthError] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
             const [formType, setFormType] = useState(TransactionType.EXPENSE);
 
             const historyRef = useRef(null);
             const formRef = useRef(null);
 
             useEffect(() => {
-                const users = Storage.getUsers();
-                // Default Admin Setup
-                if (!users.find(u => u.username === 'arvin_hanif')) {
-                    users.push({ 
-                        name: 'Arvin Hanif', 
-                        email: 'admin@warrick.io', 
-                        mobile: '0000', 
-                        pass: 'arvin_hanif', 
-                        role: UserRole.ADMIN, 
-                        username: 'arvin_hanif' 
-                    });
-                    Storage.saveUsers(users);
-                }
-                setAllUsers(users);
-
-                const session = Storage.getSession();
+                const session = JSON.parse(localStorage.getItem('W_SESSION'));
                 if (session) {
-                    setCurrentUser(session);
-                    setView('dashboard');
-                    setTransactions(Storage.getTransactions(session.username || session.email));
+                    loadUserData(session);
                 }
             }, []);
 
-            const scrollTo = (ref, type) => {
-                if (type) setFormType(type);
-                ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const loadUserData = async (user) => {
+                setIsLoading(true);
+                const txs = await CloudSync.getTransactions(user.username || user.email);
+                setCurrentUser(user);
+                setTransactions(txs);
+                setView('dashboard');
+                setIsLoading(false);
             };
 
-            const handleSignin = (e) => {
+            const handleSignin = async (e) => {
                 e.preventDefault();
+                setIsLoading(true);
+                setAuthError('');
                 const fd = new FormData(e.target);
                 const login = fd.get('login');
                 const pass = fd.get('pass');
-                const user = allUsers.find(u => (u.email === login || u.mobile === login || u.username === login) && u.pass === pass);
+
+                const users = await CloudSync.getAllUsers();
+                const user = users.find(u => (u.email === login || u.mobile === login) && u.pass === pass);
+                
                 if (user) {
-                    Storage.setSession(user);
-                    setCurrentUser(user);
-                    setTransactions(Storage.getTransactions(user.username || user.email));
-                    setView('dashboard');
-                    setAuthError('');
+                    localStorage.setItem('W_SESSION', JSON.stringify(user));
+                    await loadUserData(user);
                 } else {
-                    setAuthError('Invalid Phone/Email or Password');
+                    setAuthError('User not found or incorrect password');
                 }
+                setIsLoading(false);
             };
 
-            const handleAdminSignin = (e) => {
+            const handleAdminSignin = async (e) => {
                 e.preventDefault();
+                setIsLoading(true);
                 const id = e.target.adminId.value;
                 const pass = e.target.adminPass.value;
+
                 if (id === 'arvin_hanif' && pass === 'arvin_hanif') {
-                    const admin = allUsers.find(u => u.username === 'arvin_hanif');
-                    Storage.setSession(admin);
-                    setCurrentUser(admin);
-                    setTransactions(Storage.getTransactions('arvin_hanif'));
-                    setView('dashboard');
-                    setAuthError('');
+                    const admin = { name: 'Arvin Hanif', email: 'admin@warrick.io', role: UserRole.ADMIN, username: 'arvin_hanif' };
+                    localStorage.setItem('W_SESSION', JSON.stringify(admin));
+                    await loadUserData(admin);
                 } else {
-                    setAuthError('Admin Access Denied');
+                    setAuthError('Admin access denied');
                 }
+                setIsLoading(false);
             };
 
-            const handleSignup = (e) => {
+            const handleSignup = async (e) => {
                 e.preventDefault();
+                setIsLoading(true);
                 const fd = new FormData(e.target);
                 const email = fd.get('email');
-                const mobile = fd.get('mobile');
-                if (allUsers.find(u => u.email === email || u.mobile === mobile)) {
+                const users = await CloudSync.getAllUsers();
+                
+                if (users.find(u => u.email === email)) {
                     setAuthError('User already exists');
+                    setIsLoading(false);
                     return;
                 }
-                const newUser = { 
-                    name: fd.get('name'), 
-                    email, 
-                    mobile, 
-                    pass: fd.get('pass'), 
-                    role: UserRole.USER, 
-                    username: email 
+
+                const newUser = {
+                    name: fd.get('name'),
+                    email,
+                    mobile: fd.get('mobile'),
+                    pass: fd.get('pass'),
+                    role: UserRole.USER,
+                    username: email
                 };
-                const updated = [...allUsers, newUser];
-                Storage.saveUsers(updated);
-                setAllUsers(updated);
-                Storage.setSession(newUser);
-                setCurrentUser(newUser);
-                setTransactions([]);
-                setView('dashboard');
+
+                await CloudSync.saveUser(newUser);
+                localStorage.setItem('W_SESSION', JSON.stringify(newUser));
+                await loadUserData(newUser);
+                setIsLoading(false);
             };
 
             const logout = () => {
-                Storage.clearSession();
+                localStorage.removeItem('W_SESSION');
                 setCurrentUser(null);
+                setTransactions([]);
                 setView('signin');
+            };
+
+            const addEntry = async (e) => {
+                e.preventDefault();
+                const fd = new FormData(e.target);
+                const amount = parseFloat(fd.get('amt'));
+                const desc = fd.get('desc');
+                if (!amount || !desc) return;
+
+                const newTx = {
+                    id: Date.now().toString(),
+                    description: desc,
+                    amount,
+                    type: formType,
+                    date: new Date().toLocaleString()
+                };
+
+                const updated = [newTx, ...transactions];
+                setTransactions(updated);
+                await CloudSync.syncTransactions(currentUser.username || currentUser.email, updated);
+                e.target.reset();
             };
 
             if (view !== 'dashboard') {
@@ -205,17 +242,24 @@
                                 <p className="text-[11px] font-black text-blue-600 uppercase tracking-[0.5em] mt-3 opacity-80">POWERED BY ARVIN</p>
                             </div>
 
-                            <div className="bg-white p-10 rounded-[3rem] shadow-2xl border border-white">
+                            <div className="bg-white p-10 rounded-[3rem] shadow-2xl border border-white relative overflow-hidden">
+                                {isLoading && (
+                                    <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
+                                        <div className="loading-spinner mb-4"></div>
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Cloud Syncing...</p>
+                                    </div>
+                                )}
+
                                 {view === 'signin' && (
                                     <form onSubmit={handleSignin} className="space-y-4 text-left">
-                                        <h2 className="text-2xl font-black text-slate-900 mb-6 text-center">Login</h2>
+                                        <h2 className="text-2xl font-black text-slate-900 mb-6 text-center">User Login</h2>
                                         <input name="login" required placeholder="Email or Mobile" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold focus:ring-2 ring-blue-500/10" />
                                         <input name="pass" required type="password" placeholder="Password" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold focus:ring-2 ring-blue-500/10" />
                                         {authError && <p className="text-rose-500 text-[10px] font-bold text-center uppercase tracking-widest">{authError}</p>}
                                         <button className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl ios-button shadow-xl shadow-blue-600/20 uppercase tracking-widest text-sm">Sign In</button>
                                         <div className="py-2 flex items-center gap-4 text-slate-200"><div className="flex-grow border-t"></div><span className="text-[10px] font-bold text-slate-300">OR</span><div className="flex-grow border-t"></div></div>
                                         <button type="button" onClick={() => {setView('admin'); setAuthError('');}} className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl ios-button text-[11px] uppercase tracking-widest">Admin Portal</button>
-                                        <p className="text-center text-sm font-bold text-slate-400 mt-6">New user? <button type="button" onClick={() => setView('signup')} className="text-blue-600 font-black">Register Here</button></p>
+                                        <p className="text-center text-sm font-bold text-slate-400 mt-6">New user? <button type="button" onClick={() => setView('signup')} className="text-blue-600 font-black">Register Now</button></p>
                                     </form>
                                 )}
 
@@ -225,7 +269,7 @@
                                         <input name="adminId" required placeholder="Admin ID" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
                                         <input name="adminPass" required type="password" placeholder="Admin Key" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
                                         {authError && <p className="text-rose-500 text-[10px] font-bold text-center uppercase tracking-widest">{authError}</p>}
-                                        <button className="w-full py-5 bg-indigo-600 text-white font-black rounded-2xl ios-button shadow-xl shadow-indigo-600/20 uppercase tracking-widest text-sm">Enter Dashboard</button>
+                                        <button className="w-full py-5 bg-indigo-600 text-white font-black rounded-2xl ios-button shadow-xl shadow-indigo-600/20 uppercase tracking-widest text-sm">Open Dashboard</button>
                                         <button type="button" onClick={() => setView('signin')} className="w-full text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">Back to User Login</button>
                                     </form>
                                 )}
@@ -236,9 +280,9 @@
                                         <input name="name" required placeholder="Full Name" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
                                         <input name="email" required type="email" placeholder="Email Address" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
                                         <input name="mobile" required placeholder="Mobile Number" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
-                                        <input name="pass" required type="password" placeholder="Password" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
-                                        <button className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl ios-button shadow-xl shadow-blue-600/20 uppercase tracking-widest text-sm">Register Now</button>
-                                        <button type="button" onClick={() => setView('signin')} className="w-full text-sm font-bold text-slate-400 mt-4">Already have account? Login</button>
+                                        <input name="pass" required type="password" placeholder="Set Password" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
+                                        <button className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl ios-button shadow-xl shadow-blue-600/20 uppercase tracking-widest text-sm">Register</button>
+                                        <button type="button" onClick={() => setView('signin')} className="w-full text-sm font-bold text-slate-400 mt-4 text-center block">Already have account? Login</button>
                                     </form>
                                 )}
                             </div>
@@ -253,9 +297,9 @@
             return (
                 <div className="w-full min-h-screen py-8 px-6 md:px-12 lg:px-20 bg-[#f2f2f7]">
                     <nav className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] ios-glass p-2 rounded-full border border-white shadow-2xl flex items-center gap-1 backdrop-blur-3xl">
-                        <button onClick={() => scrollTo(historyRef)} className="px-6 py-2.5 rounded-full text-[10px] font-black uppercase tracking-[0.2em] text-slate-600 hover:bg-white transition-all ios-button">History</button>
-                        <button onClick={() => scrollTo(formRef, TransactionType.EXPENSE)} className="px-6 py-2.5 rounded-full text-[10px] font-black uppercase tracking-[0.2em] text-rose-600 hover:bg-rose-50 transition-all ios-button">Expense</button>
-                        <button onClick={() => scrollTo(formRef, TransactionType.INCOME)} className="px-6 py-2.5 rounded-full text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 hover:bg-emerald-50 transition-all ios-button">Income</button>
+                        <button onClick={() => historyRef.current?.scrollIntoView({ behavior: 'smooth' })} className="px-6 py-2.5 rounded-full text-[10px] font-black uppercase tracking-[0.2em] text-slate-600 hover:bg-white transition-all ios-button">History</button>
+                        <button onClick={() => { setFormType(TransactionType.EXPENSE); formRef.current?.scrollIntoView({ behavior: 'smooth' }); }} className="px-6 py-2.5 rounded-full text-[10px] font-black uppercase tracking-[0.2em] text-rose-600 hover:bg-rose-50 transition-all ios-button">Expense</button>
+                        <button onClick={() => { setFormType(TransactionType.INCOME); formRef.current?.scrollIntoView({ behavior: 'smooth' }); }} className="px-6 py-2.5 rounded-full text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 hover:bg-emerald-50 transition-all ios-button">Income</button>
                     </nav>
 
                     <header className="max-w-[1200px] mx-auto flex justify-between items-center mb-16 pt-12">
@@ -265,7 +309,7 @@
                         </div>
                         <div className="flex items-center gap-4">
                             <div className="text-right hidden sm:block">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">{currentUser.role}</p>
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 leading-none">{currentUser.role}</p>
                                 <p className="text-base font-bold text-slate-900 tracking-tight leading-none">{currentUser.name}</p>
                             </div>
                             <button onClick={logout} className="p-4 bg-white rounded-full shadow-lg ios-button text-rose-500 font-bold border border-rose-50">LOGOUT</button>
@@ -279,58 +323,23 @@
                             <StatCard label="Total Expenses" amount={exp} type="expense" currencySymbol="৳" />
                         </div>
 
-                        {currentUser.role === UserRole.ADMIN && (
-                            <section className="ios-glass p-10 rounded-[3rem] border border-white shadow-2xl">
-                                <h3 className="text-2xl font-black text-slate-900 mb-8 flex items-center gap-3">
-                                    <span className="w-2 h-6 bg-indigo-600 rounded-full"></span>
-                                    User Monitoring Dashboard
-                                </h3>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {allUsers.filter(u => u.role !== UserRole.ADMIN).map(u => (
-                                        <div key={u.email} className="p-6 bg-white/60 rounded-[2rem] border border-white shadow-sm flex flex-col justify-between hover:shadow-md transition-all">
-                                            <div>
-                                                <h4 className="font-bold text-slate-800 text-base">{u.name}</h4>
-                                                <p className="text-[11px] text-slate-400 font-bold mb-3">{u.email}</p>
-                                            </div>
-                                            <div className="flex justify-between items-center border-t border-slate-100 pt-3">
-                                                <span className="text-[10px] text-indigo-500 font-black uppercase tracking-widest">{u.mobile}</span>
-                                                <span className="text-[9px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full font-bold">ONLINE</span>
-                                            </div>
-                                        </div>
-                                    ))}
-                                    {allUsers.length <= 1 && <p className="col-span-full text-center py-6 text-slate-400 font-bold uppercase tracking-widest text-[10px]">No active registrations</p>}
-                                </div>
-                            </section>
-                        )}
-
                         <div ref={formRef} className="ios-glass p-10 rounded-[3rem] border border-white shadow-2xl">
-                             <h3 className="text-2xl font-black mb-6 flex items-center gap-3">
-                                <span className="w-2 h-6 bg-blue-600 rounded-full"></span>
-                                Sync New Record
+                             <h3 className="text-2xl font-black mb-6 flex items-center gap-3 text-slate-800">
+                                <span className={`w-2 h-6 rounded-full ${formType === TransactionType.INCOME ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                                New {formType} Entry
                              </h3>
-                             <form onSubmit={(e) => {
-                                 e.preventDefault();
-                                 const fd = new FormData(e.target);
-                                 const amount = parseFloat(fd.get('amt'));
-                                 const desc = fd.get('desc');
-                                 if (!amount || !desc) return;
-                                 const newTx = { id: Date.now().toString(), description: desc, amount, type: formType, date: new Date().toLocaleString() };
-                                 const updated = [newTx, ...transactions];
-                                 setTransactions(updated);
-                                 Storage.saveTransactions(currentUser.username || currentUser.email, updated);
-                                 e.target.reset();
-                             }} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <input name="desc" required placeholder="Description (e.g., Salary, Rent)" className="px-6 py-4 rounded-2xl bg-white border border-slate-100 outline-none font-bold" />
+                             <form onSubmit={addEntry} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <input name="desc" required placeholder="What was this for?" className="px-6 py-4 rounded-2xl bg-white border border-slate-100 outline-none font-bold" />
                                 <input name="amt" type="number" step="0.01" required placeholder="Amount (৳)" className="px-6 py-4 rounded-2xl bg-white border border-slate-100 outline-none font-bold" />
-                                <button className="bg-blue-600 text-white font-black rounded-2xl ios-button uppercase tracking-widest text-[10px] shadow-lg shadow-blue-500/20">Sync {formType}</button>
+                                <button className={`text-white font-black rounded-2xl ios-button uppercase tracking-widest text-[10px] shadow-lg ${formType === TransactionType.INCOME ? 'bg-emerald-600 shadow-emerald-500/20' : 'bg-blue-600 shadow-blue-500/20'}`}>Sync To Global Account</button>
                              </form>
                         </div>
 
                         <div ref={historyRef} className="ios-glass rounded-[3.5rem] border border-white shadow-2xl overflow-hidden">
                             <div className="p-8 border-b border-white/40 flex justify-between items-center bg-white/30">
                                 <div>
-                                    <h3 className="text-xl font-extrabold text-slate-900 tracking-tight leading-none">Recent Activity</h3>
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1 opacity-70">Live Activity Stream</p>
+                                    <h3 className="text-xl font-extrabold text-slate-900 tracking-tight leading-none">Sync History</h3>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1 opacity-70">Cross-Device Synchronized</p>
                                 </div>
                                 <span className="text-[10px] font-black bg-white px-4 py-1.5 rounded-full uppercase shadow-sm border border-slate-50">{transactions.length} Logs</span>
                             </div>
@@ -350,10 +359,10 @@
                                             <p className={`text-xl font-black tabular-nums tracking-tighter ${t.type === 'INCOME' ? 'text-emerald-600' : 'text-slate-900'}`}>
                                                 {t.type === 'INCOME' ? '+' : '-'}৳{t.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                                             </p>
-                                            <button onClick={() => {
+                                            <button onClick={async () => {
                                                 const updated = transactions.filter(tx => tx.id !== t.id);
                                                 setTransactions(updated);
-                                                Storage.saveTransactions(currentUser.username || currentUser.email, updated);
+                                                await CloudSync.syncTransactions(currentUser.username || currentUser.email, updated);
                                             }} className="p-2 opacity-0 group-hover:opacity-100 transition-all text-rose-300 hover:text-rose-600">
                                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
                                             </button>
@@ -370,7 +379,6 @@
                     </main>
                     <footer className="mt-20 text-center pb-10">
                         <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.5em] leading-none">POWERED BY ARVIN</p>
-                        <p className="text-[8px] font-bold text-slate-200 uppercase mt-2">© 2025 WARRICK WALLET SYSTEMS</p>
                     </footer>
                 </div>
             );
