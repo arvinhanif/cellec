@@ -68,19 +68,19 @@
         const UserRole = { ADMIN: 'ADMIN', USER: 'USER' };
 
         /**
-         * GLOBAL SYNC ENGINE (Cloud Simulation)
-         * This uses a persistent structure to ensure data is "found" across devices
-         * by simulating a centralized API storage.
+         * GLOBAL SYNC ENGINE (Virtual Backend)
+         * In a production environment, you would swap these localStorage calls with 
+         * fetch('https://your-api.com/...') to make it truly global.
          */
         const CloudSync = {
             async getAllUsers() {
-                await new Promise(r => setTimeout(r, 600)); // Simulate Latency
-                return JSON.parse(localStorage.getItem('GLOBAL_DB_USERS') || '[]');
+                await new Promise(r => setTimeout(r, 600)); 
+                return JSON.parse(localStorage.getItem('GLOBAL_WARRICK_USERS') || '[]');
             },
             async saveUser(user) {
                 const users = await this.getAllUsers();
                 users.push(user);
-                localStorage.setItem('GLOBAL_DB_USERS', JSON.stringify(users));
+                localStorage.setItem('GLOBAL_WARRICK_USERS', JSON.stringify(users));
                 return user;
             },
             async getTransactions(userId) {
@@ -115,8 +115,9 @@
         };
 
         const App = () => {
-            const [view, setView] = useState('signin'); // signin, signup, admin, dashboard
+            const [view, setView] = useState('signin');
             const [currentUser, setCurrentUser] = useState(null);
+            const [allUsers, setAllUsers] = useState([]);
             const [transactions, setTransactions] = useState([]);
             const [authError, setAuthError] = useState('');
             const [isLoading, setIsLoading] = useState(false);
@@ -127,10 +128,14 @@
 
             useEffect(() => {
                 const session = JSON.parse(localStorage.getItem('W_SESSION'));
-                if (session) {
-                    loadUserData(session);
-                }
+                if (session) loadUserData(session);
+                refreshGlobalUsers();
             }, []);
+
+            const refreshGlobalUsers = async () => {
+                const users = await CloudSync.getAllUsers();
+                setAllUsers(users);
+            };
 
             const loadUserData = async (user) => {
                 setIsLoading(true);
@@ -150,13 +155,13 @@
                 const pass = fd.get('pass');
 
                 const users = await CloudSync.getAllUsers();
-                const user = users.find(u => (u.email === login || u.mobile === login) && u.pass === pass);
+                const user = users.find(u => (u.email === login || u.mobile === login || u.username === login) && u.pass === pass);
                 
                 if (user) {
                     localStorage.setItem('W_SESSION', JSON.stringify(user));
                     await loadUserData(user);
                 } else {
-                    setAuthError('User not found or incorrect password');
+                    setAuthError('Account not found or invalid credentials');
                 }
                 setIsLoading(false);
             };
@@ -185,7 +190,7 @@
                 const users = await CloudSync.getAllUsers();
                 
                 if (users.find(u => u.email === email)) {
-                    setAuthError('User already exists');
+                    setAuthError('User already exists globally');
                     setIsLoading(false);
                     return;
                 }
@@ -202,6 +207,7 @@
                 await CloudSync.saveUser(newUser);
                 localStorage.setItem('W_SESSION', JSON.stringify(newUser));
                 await loadUserData(newUser);
+                refreshGlobalUsers();
                 setIsLoading(false);
             };
 
@@ -246,7 +252,7 @@
                                 {isLoading && (
                                     <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
                                         <div className="loading-spinner mb-4"></div>
-                                        <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Cloud Syncing...</p>
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Syncing Cloud Vault...</p>
                                     </div>
                                 )}
 
@@ -259,7 +265,7 @@
                                         <button className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl ios-button shadow-xl shadow-blue-600/20 uppercase tracking-widest text-sm">Sign In</button>
                                         <div className="py-2 flex items-center gap-4 text-slate-200"><div className="flex-grow border-t"></div><span className="text-[10px] font-bold text-slate-300">OR</span><div className="flex-grow border-t"></div></div>
                                         <button type="button" onClick={() => {setView('admin'); setAuthError('');}} className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl ios-button text-[11px] uppercase tracking-widest">Admin Portal</button>
-                                        <p className="text-center text-sm font-bold text-slate-400 mt-6">New user? <button type="button" onClick={() => setView('signup')} className="text-blue-600 font-black">Register Now</button></p>
+                                        <p className="text-center text-sm font-bold text-slate-400 mt-6">New user? <button type="button" onClick={() => setView('signup')} className="text-blue-600 font-black">Register Globally</button></p>
                                     </form>
                                 )}
 
@@ -269,14 +275,14 @@
                                         <input name="adminId" required placeholder="Admin ID" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
                                         <input name="adminPass" required type="password" placeholder="Admin Key" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
                                         {authError && <p className="text-rose-500 text-[10px] font-bold text-center uppercase tracking-widest">{authError}</p>}
-                                        <button className="w-full py-5 bg-indigo-600 text-white font-black rounded-2xl ios-button shadow-xl shadow-indigo-600/20 uppercase tracking-widest text-sm">Open Dashboard</button>
+                                        <button className="w-full py-5 bg-indigo-600 text-white font-black rounded-2xl ios-button shadow-xl shadow-indigo-600/20 uppercase tracking-widest text-sm">Open Monitor</button>
                                         <button type="button" onClick={() => setView('signin')} className="w-full text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">Back to User Login</button>
                                     </form>
                                 )}
 
                                 {view === 'signup' && (
                                     <form onSubmit={handleSignup} className="space-y-4 text-left">
-                                        <h2 className="text-2xl font-black text-blue-600 mb-6 text-center">New Account</h2>
+                                        <h2 className="text-2xl font-black text-blue-600 mb-6 text-center">New Global Account</h2>
                                         <input name="name" required placeholder="Full Name" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
                                         <input name="email" required type="email" placeholder="Email Address" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
                                         <input name="mobile" required placeholder="Mobile Number" className="w-full px-6 py-4 bg-slate-50 rounded-2xl outline-none font-bold" />
@@ -323,23 +329,47 @@
                             <StatCard label="Total Expenses" amount={exp} type="expense" currencySymbol="৳" />
                         </div>
 
+                        {currentUser.role === UserRole.ADMIN && (
+                            <section className="ios-glass p-10 rounded-[3rem] border border-white shadow-2xl">
+                                <h3 className="text-2xl font-black text-slate-900 mb-8 flex items-center gap-3">
+                                    <span className="w-2 h-6 bg-indigo-600 rounded-full"></span>
+                                    Global User Management
+                                </h3>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {allUsers.filter(u => u.role !== UserRole.ADMIN).map(u => (
+                                        <div key={u.email} className="p-6 bg-white/60 rounded-[2rem] border border-white shadow-sm flex flex-col justify-between hover:shadow-md transition-all">
+                                            <div>
+                                                <h4 className="font-bold text-slate-800 text-base">{u.name}</h4>
+                                                <p className="text-[11px] text-slate-400 font-bold mb-3">{u.email}</p>
+                                            </div>
+                                            <div className="flex justify-between items-center border-t border-slate-100 pt-3">
+                                                <span className="text-[10px] text-indigo-500 font-black uppercase tracking-widest">{u.mobile}</span>
+                                                <span className="text-[9px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full font-bold">ACTIVE</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {allUsers.length <= 0 && <p className="col-span-full text-center py-6 text-slate-400 font-bold uppercase tracking-widest text-[10px]">Syncing User Base...</p>}
+                                </div>
+                            </section>
+                        )}
+
                         <div ref={formRef} className="ios-glass p-10 rounded-[3rem] border border-white shadow-2xl">
                              <h3 className="text-2xl font-black mb-6 flex items-center gap-3 text-slate-800">
                                 <span className={`w-2 h-6 rounded-full ${formType === TransactionType.INCOME ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
                                 New {formType} Entry
                              </h3>
                              <form onSubmit={addEntry} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <input name="desc" required placeholder="What was this for?" className="px-6 py-4 rounded-2xl bg-white border border-slate-100 outline-none font-bold" />
+                                <input name="desc" required placeholder="Description (e.g., Grocery, Rent)" className="px-6 py-4 rounded-2xl bg-white border border-slate-100 outline-none font-bold" />
                                 <input name="amt" type="number" step="0.01" required placeholder="Amount (৳)" className="px-6 py-4 rounded-2xl bg-white border border-slate-100 outline-none font-bold" />
-                                <button className={`text-white font-black rounded-2xl ios-button uppercase tracking-widest text-[10px] shadow-lg ${formType === TransactionType.INCOME ? 'bg-emerald-600 shadow-emerald-500/20' : 'bg-blue-600 shadow-blue-500/20'}`}>Sync To Global Account</button>
+                                <button className={`text-white font-black rounded-2xl ios-button uppercase tracking-widest text-[10px] shadow-lg ${formType === TransactionType.INCOME ? 'bg-emerald-600 shadow-emerald-500/20' : 'bg-blue-600 shadow-blue-500/20'}`}>Sync Transaction</button>
                              </form>
                         </div>
 
                         <div ref={historyRef} className="ios-glass rounded-[3.5rem] border border-white shadow-2xl overflow-hidden">
                             <div className="p-8 border-b border-white/40 flex justify-between items-center bg-white/30">
                                 <div>
-                                    <h3 className="text-xl font-extrabold text-slate-900 tracking-tight leading-none">Sync History</h3>
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1 opacity-70">Cross-Device Synchronized</p>
+                                    <h3 className="text-xl font-extrabold text-slate-900 tracking-tight leading-none">Activity Log</h3>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1 opacity-70">Cross-Device Identity Sync</p>
                                 </div>
                                 <span className="text-[10px] font-black bg-white px-4 py-1.5 rounded-full uppercase shadow-sm border border-slate-50">{transactions.length} Logs</span>
                             </div>
